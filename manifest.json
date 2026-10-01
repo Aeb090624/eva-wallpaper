@@ -1,3 +1,11 @@
 {
-  "images": []
+  "images": [
+    {
+      "id": "img_1790827041490",
+      "filename": "1790827041490_16811.jpg",
+      "category": "asuka",
+      "path": "images/asuka/1790827041490_16811.jpg",
+      "uploadTime": "2026-10-01T03:57:24.709Z"
+    }
+  ]
 }
