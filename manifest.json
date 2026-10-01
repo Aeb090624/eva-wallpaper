@@ -78,13 +78,6 @@
       "uploadTime": "2026-10-01T06:39:28.272Z"
     },
     {
-      "id": "img_1790837030513",
-      "filename": "1790837030513_16846.jpg",
-      "category": "asuka",
-      "path": "images/asuka/1790837030513_16846.jpg",
-      "uploadTime": "2026-10-01T06:43:54.591Z"
-    },
-    {
       "id": "img_1790837239056",
       "filename": "1790837239056_16865.png",
       "category": "asuka",
@@ -104,6 +97,20 @@
       "category": "rei",
       "path": "images/rei/1790837997654_16808.jpg",
       "uploadTime": "2026-10-01T07:00:00.313Z"
+    },
+    {
+      "id": "img_1790837406081",
+      "filename": "1790837406081_16837.jpg",
+      "category": "rei",
+      "path": "images/rei/1790837406081_16837.jpg",
+      "uploadTime": "2026-10-01T06:50:06.081000+00:00"
+    },
+    {
+      "id": "img_1790838020539",
+      "filename": "1790838020539_16809.jpg",
+      "category": "rei",
+      "path": "images/rei/1790838020539_16809.jpg",
+      "uploadTime": "2026-10-01T07:00:20.539000+00:00"
     }
   ]
 }
