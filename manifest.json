@@ -1,1 +1,11 @@
-{"images": []}
+{
+  "images": [
+    {
+      "id": "img_test_upload",
+      "filename": "test_upload.jpg",
+      "category": "asuka",
+      "path": "images/asuka/test_upload.jpg",
+      "uploadTime": "2026-10-01T03:30:00.000Z"
+    }
+  ]
+}
