@@ -389,9 +389,11 @@
       </select>
     </div>
     <div class="form-group">
-      <label>选择图片（支持 JPG/PNG/WebP）</label>
-      <input type="file" id="uploadFile" accept="image/*">
+      <label>选择图片（支持 JPG/PNG/WebP，可一次多选）</label>
+      <input type="file" id="uploadFile" accept="image/*" multiple>
+      <p style="font-size:12px;color:var(--eva-text-dim);margin-top:6px;">支持一次选择多张（最多 20 张），批量上传更快</p>
     </div>
+    <div id="uploadProgress" style="display:none;margin-top:10px;padding:10px;border-radius:10px;background:rgba(168,85,247,0.12);color:var(--eva-text);font-size:13px;text-align:center;"></div>
     <div class="modal-actions">
       <button class="btn btn-cancel" onclick="closeUploadModal()">取消</button>
       <button class="btn btn-primary" id="uploadConfirmBtn" onclick="doUpload()">确认上传</button>
@@ -748,112 +750,54 @@ async function batchDelete() {
     'Content-Type': 'application/json',
     'Accept': 'application/vnd.github.v3+json'
   };
+
+  const toRemove = ids.map(id => state.images.find(i => i.id === id)).filter(Boolean);
+
+  // 并发获取 sha（每张一次请求，4 路并发）
+  const shaResults = await runWithConcurrency(toRemove, 4, async (img) => {
+    const fr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
+    if (!fr.ok) throw new Error('文件不存在或获取失败');
+    const fd = await fr.json();
+    return { img, sha: fd.sha };
+  });
+
+  // 并发删除（4 路并发）
   let okCount = 0;
-  const toRemove = [];
-  for (const id of ids) {
-    const img = state.images.find(i => i.id === id);
-    if (!img) continue;
-    toRemove.push(img);
-    try {
-      const fr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
-      if (fr.ok) {
-        const fd = await fr.json();
-        const dr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}`, {
-          method: 'DELETE', headers,
-          body: JSON.stringify({ message: `删除壁纸: ${img.filename}`, sha: fd.sha, branch })
-        });
-        if (dr.ok) okCount++;
-      }
-    } catch(e) { console.error('删除文件失败', e); }
+  const delResults = await runWithConcurrency(shaResults.filter(r => r.ok), 4, async (r) => {
+    const dr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${r.value.img.path}`, {
+      method: 'DELETE', headers,
+      body: JSON.stringify({ message: `删除壁纸: ${r.value.img.filename}`, sha: r.value.sha, branch })
+    });
+    if (!dr.ok) throw new Error('删除请求失败');
+  });
+  delResults.forEach(r => { if (r.ok) okCount++; });
+
+  // 一次更新 manifest（合并所有删除项）
+  const removedImgs = shaResults.filter(r => r.ok).map(r => r.value.img);
+  if (removedImgs.length > 0) {
+    try { await updateManifest('removeMany', removedImgs); }
+    catch(e) { showToast('图片已删除，但列表更新失败：' + e.message, 'error'); }
   }
-  // 一次更新 manifest
-  try {
-    const mr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/manifest.json?ref=${branch}`, { headers });
-    if (mr.ok) {
-      const md = await mr.json();
-      let manifest = { images: [] };
-      try { manifest = JSON.parse(atob(md.content.replace(/\n/g, ''))); } catch(e) {}
-      const rmIds = new Set(toRemove.map(i => i.id));
-      manifest.images = manifest.images.filter(i => !rmIds.has(i.id));
-      const content = btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2))));
-      await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/manifest.json`, {
-        method: 'PUT', headers,
-        body: JSON.stringify({ message: '批量删除壁纸', content, sha: md.sha, branch })
-      });
-    }
-  } catch(e) { console.error('更新manifest失败', e); }
-  showToast(okCount > 0 ? `已删除 ${okCount} 张壁纸` : '删除失败', okCount > 0 ? 'success' : 'error');
+
+  // 本地立即移除已删图片并渲染，不等 GitHub 缓存
+  const rmIds = new Set(removedImgs.map(i => i.id));
+  state.images = state.images.filter(i => !rmIds.has(i.id));
   exitDeleteMode();
-  loadImages();
+  renderGallery();
+
+  showToast(okCount > 0 ? `已删除 ${okCount} 张壁纸` : '删除失败', okCount > 0 ? 'success' : 'error');
 }
 
 // ========== 上传 ==========
 function openUploadModal() {
   if (!state.adminMode) { showToast('请先进入管理员模式', 'error'); return; }
   document.getElementById('uploadFile').value = '';
+  document.getElementById('uploadProgress').style.display = 'none';
   document.getElementById('uploadModal').classList.add('active');
 }
 
 function closeUploadModal() {
   document.getElementById('uploadModal').classList.remove('active');
-}
-
-async function doUpload() {
-  const file = document.getElementById('uploadFile').files[0];
-  const category = document.getElementById('uploadCategory').value;
-  if (!file) { showToast('请选择图片文件', 'error'); return; }
-  if (file.size > 50 * 1024 * 1024) { showToast('图片不能超过50MB', 'error'); return; }
-
-  const btn = document.getElementById('uploadConfirmBtn');
-  btn.disabled = true; btn.textContent = '上传中...';
-
-  try {
-    const { owner, repo, branch, token } = state.config;
-    // 生成文件名：时间戳+原始名
-    const timestamp = Date.now();
-    const safeName = file.name.replace(/[^\w.\-一-龥]/g, '_');
-    const filename = `${timestamp}_${safeName}`;
-    const path = `images/${category}/${filename}`;
-
-    // 转base64
-    const base64 = await fileToBase64(file);
-
-    // 上传图片到GitHub
-    const uploadRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `token ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/vnd.github.v3+json'
-      },
-      body: JSON.stringify({
-        message: `上传壁纸: ${filename}`,
-        content: base64,
-        branch: branch
-      })
-    });
-    if (!uploadRes.ok) {
-      const err = await uploadRes.json();
-      throw new Error(err.message || '上传失败');
-    }
-
-    // 更新manifest.json
-    await updateManifest('add', {
-      id: 'img_' + timestamp,
-      filename: filename,
-      category: category,
-      path: path,
-      uploadTime: new Date().toISOString()
-    });
-
-    showToast('上传成功！', 'success');
-    closeUploadModal();
-    loadImages();
-  } catch(e) {
-    showToast('上传失败: ' + e.message, 'error');
-  } finally {
-    btn.disabled = false; btn.textContent = '确认上传';
-  }
 }
 
 function fileToBase64(file) {
@@ -868,6 +812,93 @@ function fileToBase64(file) {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+// 并发执行器：限制同时进行数量，加快批量上传/删除
+async function runWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let idx = 0;
+  const workers = Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (idx < items.length) {
+      const cur = idx++;
+      try { results[cur] = { ok: true, value: await fn(items[cur], cur) }; }
+      catch(e) { results[cur] = { ok: false, error: e }; }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+// ========== 批量上传 ==========
+async function doUpload() {
+  const files = Array.from(document.getElementById('uploadFile').files);
+  const category = document.getElementById('uploadCategory').value;
+  if (files.length === 0) { showToast('请选择图片文件', 'error'); return; }
+  if (files.length > 20) { showToast('一次最多上传 20 张，请分批选择', 'error'); return; }
+  const bigFiles = files.filter(f => f.size > 50 * 1024 * 1024);
+  if (bigFiles.length > 0) { showToast(`「${bigFiles[0].name}」超过 50MB，已跳过`, 'error'); }
+  const validFiles = files.filter(f => f.size <= 50 * 1024 * 1024);
+  if (validFiles.length === 0) { showToast('没有可上传的图片', 'error'); return; }
+
+  const btn = document.getElementById('uploadConfirmBtn');
+  const progress = document.getElementById('uploadProgress');
+  btn.disabled = true;
+  progress.style.display = 'block';
+  progress.textContent = `准备上传 ${validFiles.length} 张...`;
+
+  try {
+    const { owner, repo, branch, token } = state.config;
+    const headers = {
+      'Authorization': `token ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/vnd.github.v3+json'
+    };
+    const newItems = [];
+
+    // 并发 3 张上传，带进度
+    const baseTime = Date.now();
+    await runWithConcurrency(validFiles, 3, async (file, i) => {
+      progress.textContent = `正在上传 ${i + 1}/${validFiles.length}：${file.name}`;
+      const timestamp = baseTime + i;
+      const safeName = file.name.replace(/[^\w.\-一-龥]/g, '_');
+      const filename = `${timestamp}_${safeName}`;
+      const path = `images/${category}/${filename}`;
+      const base64 = await fileToBase64(file);
+      const uploadRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+        method: 'PUT', headers,
+        body: JSON.stringify({ message: `上传壁纸: ${filename}`, content: base64, branch })
+      });
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json().catch(() => ({}));
+        throw new Error(err.message || '上传失败');
+      }
+      newItems.push({ id: 'img_' + timestamp, filename, category, path, uploadTime: new Date().toISOString() });
+    });
+
+    // 一次更新 manifest（合并所有新图）
+    if (newItems.length > 0) {
+      try { await updateManifest('addMany', newItems); }
+      catch(e) { showToast('图片已上传，但列表更新失败：' + e.message, 'error'); }
+    }
+
+    progress.style.display = 'none';
+    btn.disabled = false; btn.textContent = '确认上传';
+
+    if (newItems.length > 0) {
+      // 本地立即显示，不等 GitHub 缓存
+      state.images = state.images.concat(newItems);
+      renderGallery();
+      const failCount = validFiles.length - newItems.length;
+      showToast(`上传成功 ${newItems.length} 张` + (failCount ? `，失败 ${failCount} 张` : ''), failCount ? 'error' : 'success');
+      closeUploadModal();
+    } else {
+      showToast('全部上传失败，请检查网络或 Token', 'error');
+    }
+  } catch(e) {
+    progress.style.display = 'none';
+    btn.disabled = false; btn.textContent = '确认上传';
+    showToast('上传失败：' + e.message, 'error');
+  }
 }
 
 // ========== 删除 ==========
@@ -920,7 +951,9 @@ async function confirmDelete() {
 
     showToast('删除成功', 'success');
     closeDeleteModal();
-    loadImages();
+    // 本地立即移除，不等 GitHub 缓存
+    state.images = state.images.filter(i => i.id !== img.id);
+    renderGallery();
   } catch(e) {
     showToast('删除失败: ' + e.message, 'error');
     closeDeleteModal();
@@ -947,10 +980,12 @@ async function updateManifest(action, item) {
     } catch(e) { manifest = { images: [] }; }
   }
 
-  if (action === 'add') {
-    manifest.images.push(item);
-  } else if (action === 'remove') {
-    manifest.images = manifest.images.filter(i => i.id !== item.id);
+  if (action === 'add' || action === 'addMany') {
+    const items = Array.isArray(item) ? item : [item];
+    manifest.images = manifest.images.concat(items);
+  } else if (action === 'remove' || action === 'removeMany') {
+    const ids = new Set((Array.isArray(item) ? item : [item]).map(i => i.id));
+    manifest.images = manifest.images.filter(i => !ids.has(i.id));
   }
 
   const content = btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2))));
