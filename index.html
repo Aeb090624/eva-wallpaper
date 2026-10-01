@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <title>EVA壁纸库</title>
 <style>
   :root {
@@ -543,18 +545,20 @@ function renderGallery() {
 
   gallery.innerHTML = filtered.map((img, idx) => {
     const realIdx = state.images.indexOf(img);
-    const isSel = state.selectedIds.has(img.id);
+    // 防御：id 只允许字母数字下划线，杜绝属性/脚本注入
+    const safeId = /^[A-Za-z0-9_]+$/.test(String(img.id || '')) ? img.id : ('img_' + idx);
+    const isSel = state.selectedIds.has(safeId);
     const checkHtml = state.deleteMode
-      ? `<div class="check-circle ${isSel ? 'checked' : ''}" onclick="event.stopPropagation();toggleSelect('${img.id}')">${isSel ? '✓' : ''}</div>`
+      ? `<div class="check-circle ${isSel ? 'checked' : ''}" onclick="event.stopPropagation();toggleSelect('${safeId}')">${isSel ? '✓' : ''}</div>`
       : '';
     const clickAct = state.deleteMode
-      ? `onclick="toggleSelect('${img.id}')"`
+      ? `onclick="toggleSelect('${safeId}')"`
       : `onclick="openViewer(${realIdx})"`;
     return `
-      <div class="wall-card" ${clickAct} data-id="${img.id}">
+      <div class="wall-card" ${clickAct} data-id="${safeId}">
         ${checkHtml}
-        <img src="${getImageUrl(img)}" alt="${CAT_MAP[img.category] || ''}" loading="lazy">
-        <div class="cat-label">${CAT_MAP[img.category] || img.category}</div>
+        <img src="${getImageUrl(img)}" alt="${escapeHtml(CAT_MAP[img.category] || img.category)}" loading="lazy">
+        <div class="cat-label">${escapeHtml(CAT_MAP[img.category] || img.category)}</div>
       </div>`;
   }).join('');
 }
@@ -649,6 +653,13 @@ document.addEventListener('DOMContentLoaded', function(){
 });
 
 async function saveSettings() {
+  // 防爆破：连续输错 Token 触发冷却锁定
+  let failedAttempts = parseInt(localStorage.getItem('eva_fails') || '0', 10);
+  let lockUntil = parseInt(localStorage.getItem('eva_lock') || '0', 10);
+  if (Date.now() < lockUntil) {
+    showToast('验证失败次数过多，请 ' + Math.ceil((lockUntil - Date.now()) / 1000) + ' 秒后再试', 'error');
+    return;
+  }
   const owner = document.getElementById('cfgOwner').value.trim();
   const repo = document.getElementById('cfgRepo').value.trim();
   const branch = document.getElementById('cfgBranch').value.trim() || 'main';
@@ -670,12 +681,18 @@ async function saveSettings() {
       });
       if (!res.ok) throw new Error('Token无效');
       state.adminMode = true;
+      localStorage.removeItem('eva_fails');
+      localStorage.removeItem('eva_lock');
       updateAdminUI();
       showToast('管理员验证成功！', 'success');
       closeSettings();
       loadImages();
     } catch(e) {
-      showToast('Token验证失败，请检查是否正确', 'error');
+      failedAttempts++;
+      const waitSec = Math.min(60, failedAttempts * 10);
+      localStorage.setItem('eva_fails', String(failedAttempts));
+      localStorage.setItem('eva_lock', String(Date.now() + waitSec * 1000));
+      showToast('Token验证失败，' + waitSec + ' 秒内无法再次尝试', 'error');
       state.adminMode = false;
       updateAdminUI();
     }
@@ -835,6 +852,11 @@ async function runWithConcurrency(items, limit, fn) {
   return results;
 }
 
+// HTML 转义：防止把文件名等内容注入为 HTML
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 // 带超时的 fetch（防止网络卡住无限等待）
 async function fetchWithTimeout(url, options, timeoutMs = 120000) {
   const ctrl = new AbortController();
@@ -890,9 +912,13 @@ async function doUpload() {
   const category = document.getElementById('uploadCategory').value;
   if (files.length === 0) { showToast('请选择图片文件', 'error'); return; }
   if (files.length > 20) { showToast('一次最多上传 20 张，请分批选择', 'error'); return; }
+  // 只允许图片类型，防上传非图片文件（防恶意文件）
+  const isImage = f => (/^image\//.test(f.type || '')) || /\.(jpe?g|png|webp|gif|bmp|avif)$/i.test(f.name || '');
+  const badType = files.filter(f => !isImage(f));
+  if (badType.length > 0) { showToast(`「${badType[0].name}」不是支持的图片格式，已跳过`, 'error'); }
   const bigFiles = files.filter(f => f.size > 50 * 1024 * 1024);
   if (bigFiles.length > 0) { showToast(`「${bigFiles[0].name}」超过 50MB，已跳过`, 'error'); }
-  const validFiles = files.filter(f => f.size <= 50 * 1024 * 1024);
+  const validFiles = files.filter(f => f.size <= 50 * 1024 * 1024 && isImage(f));
   if (validFiles.length === 0) { showToast('没有可上传的图片', 'error'); return; }
 
   const btn = document.getElementById('uploadConfirmBtn');
@@ -937,7 +963,7 @@ async function doUpload() {
       failedUploadFiles = failed.map(f => f.file);
       progress.style.display = 'block';
       progress.innerHTML = `<div style="color:#ff6666;font-weight:700;">成功 ${newItems.length} 张，失败 ${failed.length} 张</div>
-        <div style="margin-top:6px;word-break:break-all;">${failed.map(f => f.file.name).join('、')}</div>
+        <div style="margin-top:6px;word-break:break-all;">${failed.map(f => escapeHtml(f.file.name)).join('、')}</div>
         <button class="btn btn-primary" style="margin-top:10px;font-size:13px;padding:6px 16px;" onclick="retryFailedUploads()">重试失败的 ${failed.length} 张</button>`;
       if (newItems.length > 0) {
         state.images = state.images.concat(newItems);
