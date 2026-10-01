@@ -6,10 +6,11 @@
 <title>EVA壁纸库</title>
 <style>
   :root {
-    --eva-orange: #FF6B00;
-    --eva-dark: #0a0a0f;
-    --eva-panel: #14141e;
-    --eva-border: #2a2a3a;
+    --eva-purple: #A855F7;
+    --eva-green2: #B3FF2E;
+    --eva-dark: #0d0818;
+    --eva-panel: #1a1030;
+    --eva-border: #3b1f6e;
     --eva-green: #00ff88;
     --eva-text: #e0e0e0;
     --eva-text-dim: #888;
@@ -21,9 +22,20 @@
     color: var(--eva-text);
     min-height: 100vh;
     background-image:
-      radial-gradient(ellipse at 20% 0%, rgba(255,107,0,0.08) 0%, transparent 50%),
-      radial-gradient(ellipse at 80% 100%, rgba(0,255,136,0.05) 0%, transparent 50%);
+      url('assets/bg.jpg'),
+      radial-gradient(ellipse at 20% 0%, rgba(168,85,247,0.18) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 100%, rgba(179,255,46,0.10) 0%, transparent 50%);
+    background-size: cover, auto, auto;
+    background-position: center, 0 0, 0 0;
   }
+
+  /* 初号机背景遮罩，保证文字可读 */
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0;
+    background: rgba(13, 8, 24, 0.74);
+    pointer-events: none;
+  }
+  .header, .categories, .gallery, .footer { position: relative; z-index: 1; }
   /* 顶部导航 */
   .header {
     position: sticky; top: 0; z-index: 100;
@@ -35,8 +47,8 @@
   }
   .logo {
     font-size: 22px; font-weight: 700; letter-spacing: 3px;
-    color: var(--eva-orange);
-    text-shadow: 0 0 20px rgba(255,107,0,0.4);
+    color: var(--eva-purple);
+    text-shadow: 0 0 20px rgba(168,85,247,0.4);
   }
   .logo span { color: var(--eva-text); font-size: 14px; font-weight: 400; margin-left: 10px; letter-spacing: 1px; }
   .header-right { display: flex; align-items: center; gap: 12px; }
@@ -52,14 +64,14 @@
     display: flex; align-items: center; justify-content: center;
     font-size: 18px; transition: all 0.2s;
   }
-  .icon-btn:hover { border-color: var(--eva-orange); color: var(--eva-orange); }
+  .icon-btn:hover { border-color: var(--eva-purple); color: var(--eva-purple); }
   .upload-btn {
-    background: var(--eva-orange); color: #fff; border: none;
+    background: var(--eva-purple); color: #fff; border: none;
     padding: 8px 18px; border-radius: 6px; cursor: pointer;
     font-size: 14px; font-weight: 600; display: none;
     transition: all 0.2s;
   }
-  .upload-btn:hover { background: #ff8533; box-shadow: 0 0 15px rgba(255,107,0,0.4); }
+  .upload-btn:hover { background: #a855f7; box-shadow: 0 0 15px rgba(168,85,247,0.4); }
   .upload-btn.active { display: inline-block; }
   .logout-btn {
     background: none; border: 1px solid #ff4444; color: #ff4444;
@@ -79,9 +91,9 @@
     color: var(--eva-text-dim); padding: 8px 20px; border-radius: 20px;
     cursor: pointer; font-size: 14px; transition: all 0.2s;
   }
-  .cat-btn:hover { border-color: var(--eva-orange); color: var(--eva-text); }
+  .cat-btn:hover { border-color: var(--eva-purple); color: var(--eva-text); }
   .cat-btn.active {
-    background: var(--eva-orange); border-color: var(--eva-orange);
+    background: var(--eva-purple); border-color: var(--eva-purple);
     color: #fff; font-weight: 600;
   }
 
@@ -98,8 +110,8 @@
   }
   .wall-card:hover {
     transform: translateY(-4px);
-    border-color: var(--eva-orange);
-    box-shadow: 0 8px 30px rgba(255,107,0,0.2);
+    border-color: var(--eva-purple);
+    box-shadow: 0 8px 30px rgba(168,85,247,0.2);
   }
   .wall-card img {
     width: 100%; height: 100%; object-fit: cover; display: block;
@@ -147,12 +159,12 @@
     display: flex; gap: 12px; align-items: center;
   }
   .viewer-download {
-    background: var(--eva-orange); color: #fff; border: none;
+    background: var(--eva-purple); color: #fff; border: none;
     padding: 10px 24px; border-radius: 6px; cursor: pointer;
     font-size: 14px; font-weight: 600; text-decoration: none;
     display: inline-block;
   }
-  .viewer-download:hover { background: #ff8533; }
+  .viewer-download:hover { background: #a855f7; }
   .viewer-nav {
     position: absolute; top: 50%; transform: translateY(-50%);
     background: rgba(255,255,255,0.1); border: none; color: #fff;
@@ -175,7 +187,7 @@
     border-radius: 12px; padding: 28px; width: 90%; max-width: 420px;
   }
   .modal h3 {
-    font-size: 18px; margin-bottom: 20px; color: var(--eva-orange);
+    font-size: 18px; margin-bottom: 20px; color: var(--eva-purple);
     letter-spacing: 1px;
   }
   .form-group { margin-bottom: 16px; }
@@ -189,7 +201,7 @@
     color: var(--eva-text); font-size: 14px; outline: none;
   }
   .form-group input:focus, .form-group select:focus {
-    border-color: var(--eva-orange);
+    border-color: var(--eva-purple);
   }
   .form-group input[type="file"] { padding: 8px; }
   .modal-actions {
@@ -199,8 +211,8 @@
     padding: 9px 20px; border-radius: 6px; cursor: pointer;
     font-size: 14px; border: none; transition: all 0.2s;
   }
-  .btn-primary { background: var(--eva-orange); color: #fff; }
-  .btn-primary:hover { background: #ff8533; }
+  .btn-primary { background: var(--eva-purple); color: #fff; }
+  .btn-primary:hover { background: #a855f7; }
   .btn-cancel { background: none; color: var(--eva-text-dim); border: 1px solid var(--eva-border); }
   .btn-cancel:hover { color: var(--eva-text); border-color: var(--eva-text-dim); }
   .btn-danger { background: #ff4444; color: #fff; }
@@ -224,7 +236,7 @@
   }
   .spinner {
     display: inline-block; width: 30px; height: 30px;
-    border: 3px solid var(--eva-border); border-top-color: var(--eva-orange);
+    border: 3px solid var(--eva-border); border-top-color: var(--eva-purple);
     border-radius: 50%; animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
