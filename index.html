@@ -255,6 +255,50 @@
     .categories { padding: 12px 16px; }
     .cat-btn { padding: 6px 14px; font-size: 13px; }
   }
+
+  /* ===== 密码显示切换 ===== */
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 44px; }
+  .pw-eye {
+    position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    color: var(--eva-text-dim); padding: 4px; line-height: 1; z-index: 2;
+  }
+  .pw-eye:hover { color: var(--eva-purple); }
+  .token-hint { font-size: 11px; color: var(--eva-text-dim); margin-top: 5px; min-height: 15px; }
+
+  /* ===== 删除模式按钮 ===== */
+  .del-mode-btn {
+    background: none; border: 1px solid #ff4444; color: #ff4444;
+    padding: 8px 14px; border-radius: 6px; cursor: pointer;
+    font-size: 13px; display: none; transition: all 0.2s;
+  }
+  .del-mode-btn.active { display: inline-block; }
+  .del-mode-btn:hover { background: rgba(255,68,68,0.1); }
+  .del-mode-btn.on { background: #ff4444; color: #fff; }
+
+  /* ===== 删除工具栏 ===== */
+  .delete-toolbar {
+    display: none; align-items: center; justify-content: center; gap: 12px;
+    padding: 10px 24px; margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .delete-toolbar.active { display: flex; }
+  .delete-toolbar .count { font-size: 14px; color: var(--eva-text); }
+  .delete-toolbar .count b { color: #ff4444; font-size: 16px; }
+
+  /* ===== 勾选圆圈 ===== */
+  .wall-card .check-circle {
+    position: absolute; top: 8px; right: 8px; z-index: 6;
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 2px solid #fff; background: rgba(0,0,0,0.4);
+    display: none; align-items: center; justify-content: center;
+    font-size: 14px; color: #fff; line-height: 1; user-select: none;
+  }
+  .delete-mode .wall-card .check-circle { display: flex; }
+  .wall-card .check-circle.checked { background: #ff4444; border-color: #ff4444; }
+  .delete-mode .wall-card { cursor: pointer; }
+  .delete-mode .wall-card img { opacity: 0.85; }
+  .delete-mode .wall-card .check-circle.checked + img { opacity: 0.6; }
 </style>
 </head>
 <body>
@@ -265,6 +309,7 @@
   <div class="header-right">
     <span class="admin-badge" id="adminBadge">管理员模式</span>
     <button class="upload-btn" id="uploadBtn" onclick="openUploadModal()">+ 上传壁纸</button>
+    <button class="del-mode-btn" id="delModeBtn" onclick="toggleDeleteMode()">🗑 删除壁纸</button>
     <button class="logout-btn" id="logoutBtn" onclick="logoutAdmin()">退出管理</button>
     <button class="icon-btn" onclick="openSettings()" title="设置">⚙</button>
   </div>
@@ -272,6 +317,13 @@
 
 <!-- 分类标签 -->
 <div class="categories" id="categories"></div>
+
+<!-- 删除工具栏（管理员删除模式） -->
+<div class="delete-toolbar" id="deleteToolbar">
+  <span class="count">已选 <b id="selCount">0</b> 张</span>
+  <button class="btn btn-danger" onclick="batchDelete()">删除选中</button>
+  <button class="btn btn-cancel" onclick="exitDeleteMode()">取消</button>
+</div>
 
 <!-- 壁纸网格 -->
 <div class="gallery" id="gallery"></div>
@@ -305,7 +357,11 @@
     </div>
     <div class="form-group">
       <label>管理员密码（GitHub Token）</label>
-      <input type="password" id="cfgToken" placeholder="粘贴你的GitHub私人令牌">
+      <div class="pw-wrap">
+        <input type="password" id="cfgToken" placeholder="粘贴你的GitHub私人令牌" autocomplete="off">
+        <button type="button" class="pw-eye" id="pwEye" onclick="togglePw()" title="显示/隐藏密码">👁</button>
+      </div>
+      <div class="token-hint" id="tokenHint"></div>
     </div>
     <div style="font-size:11px;color:var(--eva-text-dim);line-height:1.6;margin-top:8px;">
       Token 仅保存在你当前浏览器中，不会上传到任何服务器。<br>
@@ -379,7 +435,9 @@ let state = {
   config: { owner: '', repo: '', branch: 'main', token: '' },
   viewerIndex: 0,
   viewerList: [],
-  deleteTarget: null
+  deleteTarget: null,
+  deleteMode: false,
+  selectedIds: new Set()
 };
 
 // ========== 初始化 ==========
@@ -471,16 +529,24 @@ function renderGallery() {
       <div class="empty" style="grid-column:1/-1;">
         <div class="big">📷</div>
         <p>暂无壁纸</p>
-        ${state.adminMode ? '<p style="margin-top:8px;font-size:13px;">点击右上角"上传壁纸"添加</p>' : ''}
+        ${state.adminMode && !state.deleteMode ? '<p style="margin-top:8px;font-size:13px;">点击右上角"上传壁纸"添加</p>' : ''}
+        ${state.adminMode && state.deleteMode ? '<p style="margin-top:8px;font-size:13px;">当前分类没有可删除的壁纸</p>' : ''}
       </div>`;
     return;
   }
 
   gallery.innerHTML = filtered.map((img, idx) => {
     const realIdx = state.images.indexOf(img);
+    const isSel = state.selectedIds.has(img.id);
+    const checkHtml = state.deleteMode
+      ? `<div class="check-circle ${isSel ? 'checked' : ''}" onclick="event.stopPropagation();toggleSelect('${img.id}')">${isSel ? '✓' : ''}</div>`
+      : '';
+    const clickAct = state.deleteMode
+      ? `onclick="toggleSelect('${img.id}')"`
+      : `onclick="openViewer(${realIdx})"`;
     return `
-      <div class="wall-card" onclick="openViewer(${realIdx})">
-        <button class="del-btn" onclick="event.stopPropagation();openDeleteModal(${realIdx})">×</button>
+      <div class="wall-card" ${clickAct} data-id="${img.id}">
+        ${checkHtml}
         <img src="${getImageUrl(img)}" alt="${CAT_MAP[img.category] || ''}" loading="lazy">
         <div class="cat-label">${CAT_MAP[img.category] || img.category}</div>
       </div>`;
@@ -550,6 +616,32 @@ function closeSettings() {
   document.getElementById('settingsModal').classList.remove('active');
 }
 
+function togglePw() {
+  const inp = document.getElementById('cfgToken');
+  const eye = document.getElementById('pwEye');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    eye.textContent = '🙈';
+  } else {
+    inp.type = 'password';
+    eye.textContent = '👁';
+  }
+}
+
+// 密码输入字符数提示（防止粘贴不全）
+document.addEventListener('DOMContentLoaded', function(){
+  const t = document.getElementById('cfgToken');
+  if (!t) return;
+  t.addEventListener('input', function(){
+    const n = this.value.trim().length;
+    const hint = document.getElementById('tokenHint');
+    if (n === 0) { hint.textContent = ''; }
+    else if (n < 30) { hint.textContent = '已输入 ' + n + ' 位，还差 ' + (40 - n) + ' 位，请完整粘贴（长按输入框→粘贴）'; hint.style.color = '#ff4444'; }
+    else if (n < 40) { hint.textContent = '已输入 ' + n + ' 位，还差 ' + (40 - n) + ' 位，请确认复制完整'; hint.style.color = '#ffcc00'; }
+    else { hint.textContent = '已输入 ' + n + ' 位 ✓ 完整（如有空格会自动去除）'; hint.style.color = '#00ff88'; }
+  });
+});
+
 async function saveSettings() {
   const owner = document.getElementById('cfgOwner').value.trim();
   const repo = document.getElementById('cfgRepo').value.trim();
@@ -601,8 +693,98 @@ function logoutAdmin() {
 function updateAdminUI() {
   document.getElementById('adminBadge').classList.toggle('active', state.adminMode);
   document.getElementById('uploadBtn').classList.toggle('active', state.adminMode);
+  document.getElementById('delModeBtn').classList.toggle('active', state.adminMode);
   document.getElementById('logoutBtn').classList.toggle('active', state.adminMode);
   document.body.classList.toggle('admin-mode', state.adminMode);
+  if (!state.adminMode && state.deleteMode) exitDeleteMode();
+}
+
+// ========== 删除模式（勾选圆圈批量删除）==========
+function toggleDeleteMode() {
+  if (!state.adminMode) { showToast('请先进入管理员模式', 'error'); return; }
+  if (state.deleteMode) { exitDeleteMode(); return; }
+  state.deleteMode = true;
+  state.selectedIds.clear();
+  document.getElementById('delModeBtn').classList.add('on');
+  document.getElementById('deleteToolbar').classList.add('active');
+  document.body.classList.add('delete-mode');
+  renderGallery();
+  updateDeleteToolbar();
+  showToast('点击壁纸右上角圆圈勾选，再点"删除选中"', 'success');
+}
+
+function exitDeleteMode() {
+  state.deleteMode = false;
+  state.selectedIds.clear();
+  document.getElementById('delModeBtn').classList.remove('on');
+  document.getElementById('deleteToolbar').classList.remove('active');
+  document.body.classList.remove('delete-mode');
+  renderGallery();
+}
+
+function toggleSelect(id) {
+  if (!state.deleteMode) return;
+  if (state.selectedIds.has(id)) state.selectedIds.delete(id);
+  else state.selectedIds.add(id);
+  const card = document.querySelector(`.wall-card[data-id="${id}"] .check-circle`);
+  if (card) {
+    card.classList.toggle('checked', state.selectedIds.has(id));
+    card.textContent = state.selectedIds.has(id) ? '✓' : '';
+  }
+  updateDeleteToolbar();
+}
+
+function updateDeleteToolbar() {
+  document.getElementById('selCount').textContent = state.selectedIds.size;
+}
+
+async function batchDelete() {
+  const ids = Array.from(state.selectedIds);
+  if (ids.length === 0) { showToast('请先勾选要删除的壁纸', 'error'); return; }
+  if (!confirm(`确定删除选中的 ${ids.length} 张壁纸？删除后无法恢复。`)) return;
+  const { owner, repo, branch, token } = state.config;
+  const headers = {
+    'Authorization': 'token ' + token,
+    'Content-Type': 'application/json',
+    'Accept': 'application/vnd.github.v3+json'
+  };
+  let okCount = 0;
+  const toRemove = [];
+  for (const id of ids) {
+    const img = state.images.find(i => i.id === id);
+    if (!img) continue;
+    toRemove.push(img);
+    try {
+      const fr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
+      if (fr.ok) {
+        const fd = await fr.json();
+        const dr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}`, {
+          method: 'DELETE', headers,
+          body: JSON.stringify({ message: `删除壁纸: ${img.filename}`, sha: fd.sha, branch })
+        });
+        if (dr.ok) okCount++;
+      }
+    } catch(e) { console.error('删除文件失败', e); }
+  }
+  // 一次更新 manifest
+  try {
+    const mr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/manifest.json?ref=${branch}`, { headers });
+    if (mr.ok) {
+      const md = await mr.json();
+      let manifest = { images: [] };
+      try { manifest = JSON.parse(atob(md.content.replace(/\n/g, ''))); } catch(e) {}
+      const rmIds = new Set(toRemove.map(i => i.id));
+      manifest.images = manifest.images.filter(i => !rmIds.has(i.id));
+      const content = btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2))));
+      await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/manifest.json`, {
+        method: 'PUT', headers,
+        body: JSON.stringify({ message: '批量删除壁纸', content, sha: md.sha, branch })
+      });
+    }
+  } catch(e) { console.error('更新manifest失败', e); }
+  showToast(okCount > 0 ? `已删除 ${okCount} 张壁纸` : '删除失败', okCount > 0 ? 'success' : 'error');
+  exitDeleteMode();
+  loadImages();
 }
 
 // ========== 上传 ==========
