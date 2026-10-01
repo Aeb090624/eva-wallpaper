@@ -50,7 +50,11 @@
     color: var(--eva-purple);
     text-shadow: 0 0 20px rgba(168,85,247,0.4);
   }
-  .logo span { color: var(--eva-text); font-size: 14px; font-weight: 400; margin-left: 10px; letter-spacing: 1px; }
+  .logo span {
+    color: var(--eva-green);
+    font-size: 14px; font-weight: 700; margin-left: 10px; letter-spacing: 1px;
+    text-shadow: 0 0 16px rgba(0,255,136,0.55);
+  }
   .header-right { display: flex; align-items: center; gap: 12px; }
   .admin-badge {
     font-size: 12px; padding: 4px 10px; border-radius: 4px;
@@ -755,7 +759,7 @@ async function batchDelete() {
 
   // 并发获取 sha（每张一次请求，4 路并发）
   const shaResults = await runWithConcurrency(toRemove, 4, async (img) => {
-    const fr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
+    const fr = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
     if (!fr.ok) throw new Error('文件不存在或获取失败');
     const fd = await fr.json();
     return { img, sha: fd.sha };
@@ -764,7 +768,7 @@ async function batchDelete() {
   // 并发删除（4 路并发）
   let okCount = 0;
   const delResults = await runWithConcurrency(shaResults.filter(r => r.ok), 4, async (r) => {
-    const dr = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${r.value.img.path}`, {
+    const dr = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${r.value.img.path}`, {
       method: 'DELETE', headers,
       body: JSON.stringify({ message: `删除壁纸: ${r.value.img.filename}`, sha: r.value.sha, branch })
     });
@@ -792,6 +796,8 @@ async function batchDelete() {
 function openUploadModal() {
   if (!state.adminMode) { showToast('请先进入管理员模式', 'error'); return; }
   document.getElementById('uploadFile').value = '';
+  failedUploadFiles = [];
+  pendingRetryFiles = [];
   document.getElementById('uploadProgress').style.display = 'none';
   document.getElementById('uploadModal').classList.add('active');
 }
@@ -829,9 +835,58 @@ async function runWithConcurrency(items, limit, fn) {
   return results;
 }
 
+// 带超时的 fetch（防止网络卡住无限等待）
+async function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 单张上传 + 自动重试（最多 3 次，逐步加长间隔；遇限流等更久）
+async function uploadFileWithRetry(file, category, headers, owner, repo, branch, baseTime, i) {
+  const delays = [1200, 2500, 4000];
+  let lastErr = null;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, delays[attempt - 1]));
+    try {
+      const timestamp = baseTime + i;
+      const safeName = file.name.replace(/[^\w.\-一-龥]/g, '_');
+      const filename = `${timestamp}_${safeName}`;
+      const path = `images/${category}/${filename}`;
+      const base64 = await fileToBase64(file);
+      const uploadRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
+        method: 'PUT', headers,
+        body: JSON.stringify({ message: `上传壁纸: ${filename}`, content: base64, branch })
+      });
+      if (!uploadRes.ok) {
+        let msg = '上传失败 HTTP ' + uploadRes.status;
+        try { const err = await uploadRes.json(); msg = err.message || msg; } catch(e) {}
+        // 403/429 是限流，多等一会再试
+        if (uploadRes.status === 403 || uploadRes.status === 429) await new Promise(r => setTimeout(r, 8000));
+        throw new Error(msg);
+      }
+      return { timestamp, filename, path };
+    } catch(e) {
+      lastErr = e;
+      if (e && e.name === 'AbortError') lastErr = new Error('上传超时（网络慢），已自动重试');
+    }
+  }
+  throw lastErr;
+}
+
 // ========== 批量上传 ==========
+let pendingRetryFiles = [];
+let failedUploadFiles = [];
+
 async function doUpload() {
-  const files = Array.from(document.getElementById('uploadFile').files);
+  const files = pendingRetryFiles.length > 0
+    ? pendingRetryFiles.slice()
+    : Array.from(document.getElementById('uploadFile').files);
+  pendingRetryFiles = [];
   const category = document.getElementById('uploadCategory').value;
   if (files.length === 0) { showToast('请选择图片文件', 'error'); return; }
   if (files.length > 20) { showToast('一次最多上传 20 张，请分批选择', 'error'); return; }
@@ -844,7 +899,7 @@ async function doUpload() {
   const progress = document.getElementById('uploadProgress');
   btn.disabled = true;
   progress.style.display = 'block';
-  progress.textContent = `准备上传 ${validFiles.length} 张...`;
+  progress.innerHTML = `准备上传 ${validFiles.length} 张...`;
 
   try {
     const { owner, repo, branch, token } = state.config;
@@ -854,25 +909,20 @@ async function doUpload() {
       'Accept': 'application/vnd.github.v3+json'
     };
     const newItems = [];
-
-    // 并发 3 张上传，带进度
+    const failed = [];
     const baseTime = Date.now();
-    await runWithConcurrency(validFiles, 3, async (file, i) => {
-      progress.textContent = `正在上传 ${i + 1}/${validFiles.length}：${file.name}`;
-      const timestamp = baseTime + i;
-      const safeName = file.name.replace(/[^\w.\-一-龥]/g, '_');
-      const filename = `${timestamp}_${safeName}`;
-      const path = `images/${category}/${filename}`;
-      const base64 = await fileToBase64(file);
-      const uploadRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}`, {
-        method: 'PUT', headers,
-        body: JSON.stringify({ message: `上传壁纸: ${filename}`, content: base64, branch })
-      });
-      if (!uploadRes.ok) {
-        const err = await uploadRes.json().catch(() => ({}));
-        throw new Error(err.message || '上传失败');
+
+    // 并发 2 张上传，每张自动重试 3 次，带进度
+    await runWithConcurrency(validFiles, 2, async (file, i) => {
+      progress.innerHTML = `正在上传（${i + 1}/${validFiles.length}）…`;
+      try {
+        const r = await uploadFileWithRetry(file, category, headers, owner, repo, branch, baseTime, i);
+        newItems.push({ id: 'img_' + r.timestamp, filename: r.filename, category, path: r.path, uploadTime: new Date().toISOString() });
+        progress.innerHTML = `正在上传（已成功 ${newItems.length} 张，失败 ${failed.length} 张）…`;
+      } catch(e) {
+        failed.push({ file, error: e });
+        progress.innerHTML = `正在上传（已成功 ${newItems.length} 张，失败 ${failed.length} 张）…`;
       }
-      newItems.push({ id: 'img_' + timestamp, filename, category, path, uploadTime: new Date().toISOString() });
     });
 
     // 一次更新 manifest（合并所有新图）
@@ -881,24 +931,39 @@ async function doUpload() {
       catch(e) { showToast('图片已上传，但列表更新失败：' + e.message, 'error'); }
     }
 
-    progress.style.display = 'none';
     btn.disabled = false; btn.textContent = '确认上传';
 
-    if (newItems.length > 0) {
-      // 本地立即显示，不等 GitHub 缓存
+    if (failed.length > 0) {
+      failedUploadFiles = failed.map(f => f.file);
+      progress.style.display = 'block';
+      progress.innerHTML = `<div style="color:#ff6666;font-weight:700;">成功 ${newItems.length} 张，失败 ${failed.length} 张</div>
+        <div style="margin-top:6px;word-break:break-all;">${failed.map(f => f.file.name).join('、')}</div>
+        <button class="btn btn-primary" style="margin-top:10px;font-size:13px;padding:6px 16px;" onclick="retryFailedUploads()">重试失败的 ${failed.length} 张</button>`;
+      if (newItems.length > 0) {
+        state.images = state.images.concat(newItems);
+        renderGallery();
+      }
+      showToast(`成功 ${newItems.length} 张，失败 ${failed.length} 张`, 'error');
+    } else {
+      progress.style.display = 'none';
       state.images = state.images.concat(newItems);
       renderGallery();
-      const failCount = validFiles.length - newItems.length;
-      showToast(`上传成功 ${newItems.length} 张` + (failCount ? `，失败 ${failCount} 张` : ''), failCount ? 'error' : 'success');
+      showToast(`上传成功 ${newItems.length} 张！`, 'success');
       closeUploadModal();
-    } else {
-      showToast('全部上传失败，请检查网络或 Token', 'error');
     }
   } catch(e) {
-    progress.style.display = 'none';
     btn.disabled = false; btn.textContent = '确认上传';
+    progress.innerHTML = '上传失败：' + e.message;
     showToast('上传失败：' + e.message, 'error');
   }
+}
+
+// 一键重试上次失败的图片
+function retryFailedUploads() {
+  if (!failedUploadFiles.length) return;
+  pendingRetryFiles = failedUploadFiles.slice();
+  failedUploadFiles = [];
+  doUpload();
 }
 
 // ========== 删除 ==========
