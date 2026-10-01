@@ -565,10 +565,12 @@ function renderGallery() {
 
 function getImageUrl(img) {
   const { owner, repo, branch } = state.config;
+  // 防缓存：给每个图片链接加独立版本号，避免 GitHub CDN 缓存导致"新图黑块/删了还在"
+  const v = String(img.id || '').replace(/[^A-Za-z0-9]/g, '') || String(img.uploadTime || '').replace(/[^0-9]/g, '') || '0';
   if (owner && repo) {
-    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${img.path}`;
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${img.path}?v=${v}`;
   }
-  return img.path;
+  return img.path + '?v=' + v;
 }
 
 // ========== 大图查看器 ==========
@@ -774,17 +776,18 @@ async function batchDelete() {
 
   const toRemove = ids.map(id => state.images.find(i => i.id === id)).filter(Boolean);
 
-  // 并发获取 sha（每张一次请求，4 路并发）
+  // 并发获取 sha（每张一次请求，4 路并发）；文件已不存在(404)则标记 missing，同样视为可删
   const shaResults = await runWithConcurrency(toRemove, 4, async (img) => {
     const fr = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
-    if (!fr.ok) throw new Error('文件不存在或获取失败');
+    if (fr.status === 404) return { img, sha: null, missing: true };
+    if (!fr.ok) throw new Error('获取文件信息失败');
     const fd = await fr.json();
-    return { img, sha: fd.sha };
+    return { img, sha: fd.sha, missing: false };
   });
 
-  // 并发删除（4 路并发）
+  // 并发删除真实存在的文件（4 路并发）；missing 的不用删文件
   let okCount = 0;
-  const delResults = await runWithConcurrency(shaResults.filter(r => r.ok), 4, async (r) => {
+  const delResults = await runWithConcurrency(shaResults.filter(r => r.ok && !r.value.missing), 4, async (r) => {
     const dr = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${r.value.img.path}`, {
       method: 'DELETE', headers,
       body: JSON.stringify({ message: `删除壁纸: ${r.value.img.filename}`, sha: r.value.sha, branch })
@@ -792,8 +795,9 @@ async function batchDelete() {
     if (!dr.ok) throw new Error('删除请求失败');
   });
   delResults.forEach(r => { if (r.ok) okCount++; });
+  okCount += shaResults.filter(r => r.ok && r.value.missing).length;
 
-  // 一次更新 manifest（合并所有删除项）
+  // 一次更新 manifest（合并所有删除项，含幽灵记录）
   const removedImgs = shaResults.filter(r => r.ok).map(r => r.value.img);
   if (removedImgs.length > 0) {
     try { await updateManifest('removeMany', removedImgs); }
@@ -812,6 +816,7 @@ async function batchDelete() {
 // ========== 上传 ==========
 function openUploadModal() {
   if (!state.adminMode) { showToast('请先进入管理员模式', 'error'); return; }
+  if (state.deleteMode) exitDeleteMode();
   document.getElementById('uploadFile').value = '';
   failedUploadFiles = [];
   pendingRetryFiles = [];
@@ -974,7 +979,7 @@ async function doUpload() {
       progress.style.display = 'none';
       state.images = state.images.concat(newItems);
       renderGallery();
-      showToast(`上传成功 ${newItems.length} 张！`, 'success');
+      showToast(`上传成功 ${newItems.length} 张到「${CAT_MAP[category] || category}」！`, 'success');
       closeUploadModal();
     }
   } catch(e) {
@@ -1055,50 +1060,61 @@ async function confirmDelete() {
 async function updateManifest(action, item) {
   const { owner, repo, branch, token } = state.config;
   const manifestPath = 'manifest.json';
+  let lastErr = null;
 
-  // 获取当前manifest和sha
-  const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${manifestPath}?ref=${branch}`, {
-    headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
-  });
-
-  let manifest = { images: [] };
-  let sha = null;
-  if (res.ok) {
-    const data = await res.json();
-    sha = data.sha;
+  // 自动重试 3 次：防止网络抖动/并发冲突导致列表与文件不同步
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, 1500 * attempt));
     try {
-      manifest = JSON.parse(atob(data.content.replace(/\n/g, '')));
-    } catch(e) { manifest = { images: [] }; }
-  }
+      // 获取当前manifest和sha
+      const res = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${manifestPath}?ref=${branch}`, {
+        headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
+      });
 
-  if (action === 'add' || action === 'addMany') {
-    const items = Array.isArray(item) ? item : [item];
-    manifest.images = manifest.images.concat(items);
-  } else if (action === 'remove' || action === 'removeMany') {
-    const ids = new Set((Array.isArray(item) ? item : [item]).map(i => i.id));
-    manifest.images = manifest.images.filter(i => !ids.has(i.id));
-  }
+      let manifest = { images: [] };
+      let sha = null;
+      if (res.ok) {
+        const data = await res.json();
+        sha = data.sha;
+        try {
+          manifest = JSON.parse(atob(data.content.replace(/\n/g, '')));
+        } catch(e) { manifest = { images: [] }; }
+      }
 
-  const content = btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2))));
+      if (action === 'add' || action === 'addMany') {
+        const items = Array.isArray(item) ? item : [item];
+        manifest.images = manifest.images.concat(items);
+      } else if (action === 'remove' || action === 'removeMany') {
+        const ids = new Set((Array.isArray(item) ? item : [item]).map(i => i.id));
+        manifest.images = manifest.images.filter(i => !ids.has(i.id));
+      }
 
-  const putRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${manifestPath}`, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `token ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/vnd.github.v3+json'
-    },
-    body: JSON.stringify({
-      message: action === 'add' ? '更新壁纸列表' : '更新壁纸列表',
-      content: content,
-      sha: sha,
-      branch: branch
-    })
-  });
-  if (!putRes.ok) {
-    const err = await putRes.json();
-    throw new Error(err.message || '更新列表失败');
+      const content = btoa(unescape(encodeURIComponent(JSON.stringify(manifest, null, 2))));
+
+      const putRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${manifestPath}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `token ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/vnd.github.v3+json'
+        },
+        body: JSON.stringify({
+          message: '更新壁纸列表',
+          content: content,
+          sha: sha,
+          branch: branch
+        })
+      });
+      if (!putRes.ok) {
+        const err = await putRes.json().catch(() => ({}));
+        throw new Error(err.message || '更新列表失败');
+      }
+      return true;
+    } catch(e) {
+      lastErr = e;
+    }
   }
+  throw lastErr;
 }
 
 // ========== Toast ==========
