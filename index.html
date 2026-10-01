@@ -602,6 +602,38 @@ function closeViewer() {
   document.body.style.overflow = '';
 }
 
+// 下载壁纸：跨域图片直接点 <a download> 会被浏览器忽略（变成打开图片预览），
+// 这里用 fetch 转 Blob + ObjectURL 强制触发真实文件下载
+async function downloadWallpaper() {
+  const img = state.viewerList[state.viewerIndex];
+  if (!img) return;
+  const url = getImageUrl(img);
+  try {
+    const resp = await fetchWithTimeout(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    let name = img.filename || 'wallpaper';
+    if (!/\.[a-z0-9]+$/i.test(name)) name += '.jpg';
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = name;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objUrl), 8000);
+    showToast('已开始下载，文件保存在浏览器下载目录', 'success');
+  } catch(e) {
+    showToast('下载失败，请长按图片保存', 'error');
+    window.open(url, '_blank');
+  }
+}
+document.getElementById('viewerDownload').addEventListener('click', (e) => {
+  e.preventDefault();
+  downloadWallpaper();
+});
+
 // 点击大图弹窗空白处关闭；点图片/按钮/信息条不关闭（下载按钮不会触发关闭）
 document.getElementById('viewer').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeViewer();
