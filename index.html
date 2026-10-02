@@ -541,7 +541,8 @@ async function fetchManifest() {
     return { images: [] };
   }
   // 通过GitHub API读取
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/manifest.json?ref=${branch}`;
+  // &t= 缓存穿透：GitHub contents API 读取有约60秒缓存，不加会导致上传/删除后刷新看到旧列表
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/manifest.json?ref=${branch}&t=${Date.now()}`;
   const headers = { 'Accept': 'application/vnd.github.v3+json' };
   if (state.config.token) headers['Authorization'] = `token ${state.config.token}`;
   const res = await fetch(url, { headers });
@@ -842,7 +843,7 @@ async function batchDelete() {
 
   // 并发获取 sha（每张一次请求，4 路并发）；文件已不存在(404)则标记 missing，同样视为可删
   const shaResults = await runWithConcurrency(toRemove, 4, async (img) => {
-    const fr = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, { headers });
+    const fr = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}&t=${Date.now()}`, { headers });
     if (fr.status === 404) return { img, sha: null, missing: true };
     if (!fr.ok) throw new Error('获取文件信息失败');
     const fd = await fr.json();
@@ -1105,7 +1106,7 @@ async function selfHealManifest() {
   const { owner, repo, branch, token } = state.config;
   if (!token) return;
   try {
-    const treeRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, {
+    const treeRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1&t=${Date.now()}`, {
       headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
     });
     if (!treeRes.ok) return;
@@ -1152,7 +1153,7 @@ async function confirmDelete() {
     const { owner, repo, branch, token } = state.config;
 
     // 获取文件sha
-    const fileRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, {
+    const fileRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}&t=${Date.now()}`, {
       headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
     });
     if (!fileRes.ok) throw new Error('文件不存在或获取失败');
@@ -1202,7 +1203,7 @@ async function updateManifest(action, item) {
     if (attempt > 0) await new Promise(r => setTimeout(r, 1500 * attempt));
     try {
       // 获取当前manifest和sha
-      const res = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${manifestPath}?ref=${branch}`, {
+      const res = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${manifestPath}?ref=${branch}&t=${Date.now()}`, {
         headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
       });
 
