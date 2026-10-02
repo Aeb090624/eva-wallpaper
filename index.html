@@ -1114,38 +1114,21 @@ async function selfHealManifest() {
     const fileSet = new Set((tree.tree || []).map(t => t.path).filter(p => imgRe.test(p)));
     if (fileSet.size === 0) return;
 
-    const knownSet = new Set(state.images.map(i => i.path));
-    const orphans = [];
+    // 只清除幽灵记录（列表有记录但文件已删的失效记录，避免黑图）。
+    // 重要：绝不做"孤儿补录"——GitHub trees API 有缓存延迟，删除后几分钟内
+    // 仍返回旧树，会把已删除文件误当孤儿补录回来，导致"删了又恢复"。
+    // 上传时列表保存失败已有专门的"重试保存列表"按钮兜底，不需要自动补录。
     const ghosts = [];
     for (const img of state.images) {
       if (imgRe.test(img.path || '') && !fileSet.has(img.path)) ghosts.push(img);
-    }
-    for (const p of fileSet) {
-      if (knownSet.has(p)) continue;
-      const parts = p.split('/');
-      const filename = parts[parts.length - 1];
-      const tsMatch = filename.match(/^(\d+)/);
-      let id = 'img_' + (tsMatch ? tsMatch[1] : String(Date.now()));
-      const allIds = new Set(state.images.map(i => i.id));
-      while (allIds.has(id) || orphans.some(o => o.id === id)) id += '_x';
-      orphans.push({ id, filename, category: parts[1], path: p, uploadTime: new Date().toISOString() });
-    }
-
-    let changed = false;
-    if (orphans.length > 0) {
-      await updateManifest('addMany', orphans);
-      state.images = state.images.concat(orphans);
-      changed = true;
-      showToast(`已自动恢复 ${orphans.length} 张未记录的壁纸`, 'success');
     }
     if (ghosts.length > 0) {
       await updateManifest('removeMany', ghosts);
       const ghostIds = new Set(ghosts.map(i => i.id));
       state.images = state.images.filter(i => !ghostIds.has(i.id));
-      changed = true;
+      renderGallery();
       showToast(`已自动清除 ${ghosts.length} 张失效记录（黑图修复）`, 'success');
     }
-    if (changed) renderGallery();
   } catch(e) { /* 自愈失败不影响正常浏览 */ }
 }
 
