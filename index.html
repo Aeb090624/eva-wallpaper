@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://busuanzi.ibruce.info; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <title>EVA壁纸库</title>
 <style>
   :root {
@@ -64,6 +64,16 @@
     border: 1px solid rgba(0,255,136,0.3); display: none;
   }
   .admin-badge.active { display: inline-block; }
+  .visitor-badge {
+    font-size: 12px; padding: 4px 10px; border-radius: 4px;
+    background: rgba(168,85,247,0.15); color: var(--eva-purple);
+    border: 1px solid rgba(168,85,247,0.35);
+    display: none; align-items: center; gap: 6px; cursor: default; user-select: none;
+  }
+  .visitor-badge.active { display: inline-flex; }
+  .visitor-badge .eye { font-size: 15px; line-height: 1; }
+  .visitor-badge .num { font-weight: 700; font-size: 13px; color: #fff; }
+  .visitor-badge .label { color: var(--eva-text-dim); font-size: 11px; }
   .icon-btn {
     background: none; border: 1px solid var(--eva-border); color: var(--eva-text-dim);
     width: 38px; height: 38px; border-radius: 6px; cursor: pointer;
@@ -315,6 +325,7 @@
   <div class="logo">EVA<span>WALLPAPER LIBRARY</span></div>
   <div class="header-right">
     <span class="admin-badge" id="adminBadge">管理员模式</span>
+    <span class="visitor-badge" id="visitorBadge" title="累计去重访客数（同一访客只计一次）"><span class="eye">👁</span><span class="num" id="busuanzi_value_site_uv">--</span><span class="label">访客</span></span>
     <button class="upload-btn" id="uploadBtn" onclick="openUploadModal()">+ 上传壁纸</button>
     <button class="del-mode-btn" id="delModeBtn" onclick="toggleDeleteMode()">🗑 删除壁纸</button>
     <button class="logout-btn" id="logoutBtn" onclick="logoutAdmin()">退出管理</button>
@@ -446,7 +457,8 @@ let state = {
   viewerList: [],
   deleteTarget: null,
   deleteMode: false,
-  selectedIds: new Set()
+  selectedIds: new Set(),
+  unsavedItems: []
 };
 
 // ========== 初始化 ==========
@@ -502,6 +514,8 @@ async function loadImages() {
     console.warn('读取manifest失败，使用空列表', e);
     state.images = [];
   }
+  // 管理员自愈：自动补录"文件已上传但列表没记录"的图、清除"列表有但文件已删"的黑图记录
+  if (state.adminMode && state.config.token) selfHealManifest();
   renderGallery();
 }
 
@@ -758,6 +772,7 @@ function updateAdminUI() {
   document.getElementById('uploadBtn').classList.toggle('active', state.adminMode);
   document.getElementById('delModeBtn').classList.toggle('active', state.adminMode);
   document.getElementById('logoutBtn').classList.toggle('active', state.adminMode);
+  document.getElementById('visitorBadge').classList.toggle('active', state.adminMode);
   document.body.classList.toggle('admin-mode', state.adminMode);
   if (!state.adminMode && state.deleteMode) exitDeleteMode();
 }
@@ -837,9 +852,10 @@ async function batchDelete() {
 
   // 一次更新 manifest（合并所有删除项，含幽灵记录）
   const removedImgs = shaResults.filter(r => r.ok).map(r => r.value.img);
+  let listSaved = true;
   if (removedImgs.length > 0) {
     try { await updateManifest('removeMany', removedImgs); }
-    catch(e) { showToast('图片已删除，但列表更新失败：' + e.message, 'error'); }
+    catch(e) { listSaved = false; }
   }
 
   // 本地立即移除已删图片并渲染，不等 GitHub 缓存
@@ -848,7 +864,11 @@ async function batchDelete() {
   exitDeleteMode();
   renderGallery();
 
-  showToast(okCount > 0 ? `已删除 ${okCount} 张壁纸` : '删除失败', okCount > 0 ? 'success' : 'error');
+  if (!listSaved && removedImgs.length > 0) {
+    showToast('文件已删除，但列表更新失败：旧记录刷新后可能短暂出现，重新进入管理员模式会自动清除', 'error');
+  } else {
+    showToast(okCount > 0 ? `已删除 ${okCount} 张壁纸` : '删除失败', okCount > 0 ? 'success' : 'error');
+  }
 }
 
 // ========== 上传 ==========
@@ -994,15 +1014,25 @@ async function doUpload() {
       }
     });
 
-    // 一次更新 manifest（合并所有新图）
+    // 一次更新 manifest（合并所有新图）。
+    // 关键：列表保存失败 = 图片没真正"上线"（刷新会消失），本地绝不假装成功，必须提供重试
+    let listSaved = true;
     if (newItems.length > 0) {
       try { await updateManifest('addMany', newItems); }
-      catch(e) { showToast('图片已上传，但列表更新失败：' + e.message, 'error'); }
+      catch(e) { listSaved = false; state.unsavedItems = newItems.slice(); }
     }
 
     btn.disabled = false; btn.textContent = '确认上传';
 
-    if (failed.length > 0) {
+    if (!listSaved) {
+      failedUploadFiles = failed.map(f => f.file);
+      progress.style.display = 'block';
+      progress.innerHTML = `<div style="color:#ffb84d;font-weight:700;">图片已上传到仓库，但列表保存失败（刷新后会消失）</div>
+        <div style="margin-top:6px;color:#ff6666;">失败 ${failed.length} 张：${failed.map(f => escapeHtml(f.file.name)).join('、') || '无'}</div>
+        <button class="btn btn-primary" style="margin-top:10px;font-size:13px;padding:6px 16px;" onclick="retrySaveList()">重试保存列表（${newItems.length} 张）</button>
+        ${failed.length ? `<button class="btn btn-primary" style="margin-top:10px;font-size:13px;padding:6px 16px;" onclick="retryFailedUploads()">重试失败的 ${failed.length} 张</button>` : ''}`;
+      showToast('图片已上传，但列表保存失败，请点"重试保存列表"', 'error');
+    } else if (failed.length > 0) {
       failedUploadFiles = failed.map(f => f.file);
       progress.style.display = 'block';
       progress.innerHTML = `<div style="color:#ff6666;font-weight:700;">成功 ${newItems.length} 张，失败 ${failed.length} 张</div>
@@ -1035,6 +1065,79 @@ function retryFailedUploads() {
   doUpload();
 }
 
+// 重试保存"已上传但列表没记录"的图片
+async function retrySaveList() {
+  if (!state.unsavedItems || !state.unsavedItems.length) return;
+  const prog = document.getElementById('uploadProgress');
+  const btn = prog ? prog.querySelector('.btn') : null;
+  if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+  try {
+    await updateManifest('addMany', state.unsavedItems);
+    state.images = state.images.concat(state.unsavedItems);
+    state.unsavedItems = [];
+    renderGallery();
+    if (prog) prog.style.display = 'none';
+    showToast('列表已保存成功，图片已恢复显示', 'success');
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '重试保存列表'; }
+    showToast('列表保存失败：' + e.message, 'error');
+  }
+}
+
+// 自愈：管理员模式加载时双向修复 manifest 与仓库文件的一致性
+// 1) 孤儿：文件在仓库但列表没记录（上传时列表保存失败）→ 自动补录
+// 2) 幽灵：列表有记录但文件已不存在（删除时列表保存失败/异常）→ 自动清除，避免黑图
+let lastHealAt = 0;
+async function selfHealManifest() {
+  if (Date.now() - lastHealAt < 10 * 60 * 1000) return; // 10 分钟节流
+  lastHealAt = Date.now();
+  const { owner, repo, branch, token } = state.config;
+  if (!token) return;
+  try {
+    const treeRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, {
+      headers: { 'Authorization': 'token ' + token, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (!treeRes.ok) return;
+    const tree = await treeRes.json();
+    const imgRe = /^images\/[^\/]+\/[^\/]+\.(jpg|jpeg|png|webp|gif)$/i;
+    const fileSet = new Set((tree.tree || []).map(t => t.path).filter(p => imgRe.test(p)));
+    if (fileSet.size === 0) return;
+
+    const knownSet = new Set(state.images.map(i => i.path));
+    const orphans = [];
+    const ghosts = [];
+    for (const img of state.images) {
+      if (imgRe.test(img.path || '') && !fileSet.has(img.path)) ghosts.push(img);
+    }
+    for (const p of fileSet) {
+      if (knownSet.has(p)) continue;
+      const parts = p.split('/');
+      const filename = parts[parts.length - 1];
+      const tsMatch = filename.match(/^(\d+)/);
+      let id = 'img_' + (tsMatch ? tsMatch[1] : String(Date.now()));
+      const allIds = new Set(state.images.map(i => i.id));
+      while (allIds.has(id) || orphans.some(o => o.id === id)) id += '_x';
+      orphans.push({ id, filename, category: parts[1], path: p, uploadTime: new Date().toISOString() });
+    }
+
+    let changed = false;
+    if (orphans.length > 0) {
+      await updateManifest('addMany', orphans);
+      state.images = state.images.concat(orphans);
+      changed = true;
+      showToast(`已自动恢复 ${orphans.length} 张未记录的壁纸`, 'success');
+    }
+    if (ghosts.length > 0) {
+      await updateManifest('removeMany', ghosts);
+      const ghostIds = new Set(ghosts.map(i => i.id));
+      state.images = state.images.filter(i => !ghostIds.has(i.id));
+      changed = true;
+      showToast(`已自动清除 ${ghosts.length} 张失效记录（黑图修复）`, 'success');
+    }
+    if (changed) renderGallery();
+  } catch(e) { /* 自愈失败不影响正常浏览 */ }
+}
+
 // ========== 删除 ==========
 function openDeleteModal(index) {
   state.deleteTarget = index;
@@ -1055,14 +1158,14 @@ async function confirmDelete() {
     const { owner, repo, branch, token } = state.config;
 
     // 获取文件sha
-    const fileRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, {
+    const fileRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}`, {
       headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
     });
     if (!fileRes.ok) throw new Error('文件不存在或获取失败');
     const fileData = await fileRes.json();
 
     // 删除文件
-    const delRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}`, {
+    const delRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}`, {
       method: 'DELETE',
       headers: {
         'Authorization': `token ${token}`,
@@ -1173,6 +1276,8 @@ document.querySelectorAll('.modal-mask').forEach(mask => {
 // 启动
 init();
 </script>
+<!-- 访客统计：不蒜子（免费第三方，按 IP 去重，累计 UV） -->
+<script async src="https://busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script>
 <!-- 页脚版权声明 -->
 <div class="footer">
   <p>© EVA壁纸库 · 本站壁纸均为《新世纪福音战士》(EVA) 同人粉丝作品，版权归原作者 / 原画师所有</p>
