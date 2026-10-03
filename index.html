@@ -54,8 +54,7 @@
     display: flex; align-items: center; gap: 10px;
   }
   .logo .nerv-icon {
-    width: 22px; height: 22px; flex-shrink: 0;
-    filter: drop-shadow(0 0 6px rgba(255,213,79,0.55));
+    width: 22px; height: 22px; flex-shrink: 0; object-fit: contain;
   }
   .logo span {
     color: var(--eva-green);
@@ -346,10 +345,7 @@
 <!-- 顶部导航 -->
 <div class="header">
   <div class="logo">
-    <svg class="nerv-icon" viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M16 1.5 C10 6.5 4.5 9.5 4.5 13.5 C4.5 18 9.5 22.5 16 23.5 C22.5 22.5 27.5 18 27.5 13.5 C27.5 9.5 22 6.5 16 1.5 Z" fill="#FFD54F"/>
-      <path d="M16 2.5 L16 19.5" stroke="#0d0d13" stroke-width="1.6" stroke-linecap="round"/>
-    </svg>
+    <img class="nerv-icon" src="assets/nerv.png" alt="NERV">
     EVA<span>WALLPAPER LIBRARY</span>
   </div>
   <div class="header-right">
