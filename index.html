@@ -164,16 +164,18 @@
   }
   .empty .big { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
 
-  /* 大图查看器 */
+  /* 大图查看器：手机 App 式放大过渡（0.2s 平滑） */
   .viewer {
     position: fixed; inset: 0; z-index: 200;
-    background: rgba(0,0,0,0.95); display: none;
-    align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.95);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.2s ease-out, visibility 0s linear 0.2s;
   }
-  .viewer.active { display: flex; }
+  .viewer.active { opacity: 1; visibility: visible; transition: opacity 0.2s ease-out; }
   .viewer img {
     max-width: 90vw; max-height: 85vh; object-fit: contain;
-    border-radius: 4px;
+    border-radius: 4px; will-change: transform, opacity;
   }
   .viewer-close {
     position: absolute; top: 20px; right: 24px;
@@ -594,7 +596,7 @@ function renderGallery() {
       : '';
     const clickAct = state.deleteMode
       ? `onclick="toggleSelect('${safeId}')"`
-      : `onclick="openViewer(${realIdx})"`;
+      : `onclick="openViewer(${realIdx}, this)"`;
     return `
       <div class="wall-card" style="animation-delay:${Math.min(idx * 25, 250)}ms" ${clickAct} data-id="${safeId}">
         ${checkHtml}
@@ -615,7 +617,7 @@ function getImageUrl(img) {
 }
 
 // ========== 大图查看器 ==========
-function openViewer(index) {
+function openViewer(index, cardEl) {
   const filtered = state.currentCat === 'all'
     ? state.images
     : state.images.filter(img => img.category === state.currentCat);
@@ -623,8 +625,30 @@ function openViewer(index) {
   state.viewerIndex = filtered.indexOf(state.images[index]);
   if (state.viewerIndex < 0) state.viewerIndex = 0;
   updateViewer();
-  document.getElementById('viewer').classList.add('active');
+  const viewer = document.getElementById('viewer');
+  const img = document.getElementById('viewerImg');
+  viewer.classList.add('active');
   document.body.style.overflow = 'hidden';
+  // 手机 App 式放大过渡：从点击的卡片位置平滑展开到全屏（0.2s）
+  state.viewerFrom = null;
+  if (cardEl && typeof cardEl.getBoundingClientRect === 'function') {
+    const r = cardEl.getBoundingClientRect();
+    const cardImg = cardEl.querySelector('img');
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const asp = (cardImg && cardImg.naturalWidth) ? cardImg.naturalWidth / cardImg.naturalHeight : 9/16;
+    const W = Math.min(vw * 0.9, vh * 0.85 * asp);
+    const s = Math.min(r.width / W, 1);
+    const dx = (r.left + r.width / 2) - vw / 2;
+    const dy = (r.top + r.height / 2) - vh / 2;
+    state.viewerFrom = { dx: dx, dy: dy, s: s };
+    img.style.transition = 'none';
+    img.style.transform = 'translate(' + dx + 'px, ' + dy + 'px) scale(' + s + ')';
+    img.style.opacity = '0';
+    void img.offsetWidth; // 强制重排，确保动画起点生效
+    img.style.transition = 'transform 0.2s cubic-bezier(0.3, 0.75, 0.25, 1), opacity 0.2s ease-out';
+    img.style.transform = 'none';
+    img.style.opacity = '1';
+  }
 }
 
 function updateViewer() {
@@ -638,8 +662,23 @@ function updateViewer() {
 }
 
 function closeViewer() {
-  document.getElementById('viewer').classList.remove('active');
+  const viewer = document.getElementById('viewer');
+  const img = document.getElementById('viewerImg');
+  const f = state.viewerFrom;
   document.body.style.overflow = '';
+  if (f) {
+    // 反向动画：图片缩回来源卡片位置后隐藏（0.2s）
+    img.style.transition = 'transform 0.2s cubic-bezier(0.6, 0, 0.45, 1), opacity 0.2s ease-in';
+    img.style.transform = 'translate(' + f.dx + 'px, ' + f.dy + 'px) scale(' + f.s + ')';
+    img.style.opacity = '0';
+    setTimeout(() => {
+      viewer.classList.remove('active');
+      state.viewerFrom = null;
+    }, 210);
+  } else {
+    viewer.classList.remove('active');
+    state.viewerFrom = null;
+  }
 }
 
 // 下载壁纸：跨域图片直接点 <a download> 会被浏览器忽略（变成打开图片预览），
@@ -680,6 +719,10 @@ document.getElementById('viewer').addEventListener('click', (e) => {
 });
 
 function navViewer(dir) {
+  const img = document.getElementById('viewerImg');
+  img.style.transition = 'none';
+  img.style.transform = 'none';
+  img.style.opacity = '1';
   state.viewerIndex = (state.viewerIndex + dir + state.viewerList.length) % state.viewerList.length;
   updateViewer();
 }
