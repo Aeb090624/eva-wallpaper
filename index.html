@@ -51,6 +51,11 @@
     font-size: 22px; font-weight: 700; letter-spacing: 3px;
     color: var(--eva-purple);
     text-shadow: 0 0 20px rgba(168,85,247,0.4);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .logo .nerv-icon {
+    width: 22px; height: 22px; flex-shrink: 0;
+    filter: drop-shadow(0 0 6px rgba(255,213,79,0.55));
   }
   .logo span {
     color: var(--eva-green);
@@ -133,6 +138,12 @@
     width: 100%; height: 100%; object-fit: cover; display: block;
     background: linear-gradient(135deg, #1a1030 0%, #2a1a4e 100%);
   }
+  /* 卡片入场动画：0.3s 淡入 + 轻微上浮（错落延迟，增加精致感） */
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .wall-card { animation: cardIn 0.3s ease-out; }
   .wall-card .cat-label {
     position: absolute; bottom: 0; left: 0; right: 0;
     background: linear-gradient(transparent, rgba(0,0,0,0.8));
@@ -269,6 +280,7 @@
     .gallery { grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 0 12px 30px; }
     .header { flex-wrap: wrap; gap: 6px 10px; padding: 10px 14px; }
     .logo { font-size: 17px; letter-spacing: 2px; white-space: nowrap; }
+    .logo .nerv-icon { width: 17px; height: 17px; }
     .logo span { font-size: 11px; margin-left: 8px; letter-spacing: 1px; }
     /* 操作按钮整体换到第二行，避免和 logo 挤在一起 */
     .header-right { width: 100%; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
@@ -333,7 +345,13 @@
 
 <!-- 顶部导航 -->
 <div class="header">
-  <div class="logo">EVA<span>WALLPAPER LIBRARY</span></div>
+  <div class="logo">
+    <svg class="nerv-icon" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M16 1.5 C10 6.5 4.5 9.5 4.5 13.5 C4.5 18 9.5 22.5 16 23.5 C22.5 22.5 27.5 18 27.5 13.5 C27.5 9.5 22 6.5 16 1.5 Z" fill="#FFD54F"/>
+      <path d="M16 2.5 L16 19.5" stroke="#0d0d13" stroke-width="1.6" stroke-linecap="round"/>
+    </svg>
+    EVA<span>WALLPAPER LIBRARY</span>
+  </div>
   <div class="header-right">
     <span class="admin-badge" id="adminBadge">管理员模式</span>
     <span class="visitor-badge" id="visitorBadge" title="累计去重访客数（同一访客只计一次）"><span class="eye">👁</span><span class="num" id="busuanzi_value_site_uv">--</span><span class="label">访客</span></span>
@@ -582,7 +600,7 @@ function renderGallery() {
       ? `onclick="toggleSelect('${safeId}')"`
       : `onclick="openViewer(${realIdx})"`;
     return `
-      <div class="wall-card" ${clickAct} data-id="${safeId}">
+      <div class="wall-card" style="animation-delay:${Math.min(idx * 25, 250)}ms" ${clickAct} data-id="${safeId}">
         ${checkHtml}
         <img src="${getImageUrl(img)}" alt="${escapeHtml(CAT_MAP[img.category] || img.category)}" loading="lazy">
         <div class="cat-label">${escapeHtml(CAT_MAP[img.category] || img.category)}</div>
