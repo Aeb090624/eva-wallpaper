@@ -128,10 +128,13 @@
     background: var(--eva-panel); border: 1px solid var(--eva-border);
     cursor: pointer; transition: all 0.3s; aspect-ratio: 9/16;
   }
-  .wall-card:hover {
-    transform: translateY(-4px);
-    border-color: var(--eva-purple);
-    box-shadow: 0 8px 30px rgba(168,85,247,0.2);
+  /* 悬停效果仅对鼠标设备生效，触摸屏不会粘滞 */
+  @media (hover: hover) {
+    .wall-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--eva-purple);
+      box-shadow: 0 8px 30px rgba(168,85,247,0.2);
+    }
   }
   .wall-card img {
     width: 100%; height: 100%; object-fit: cover; display: block;
@@ -143,21 +146,15 @@
     to { opacity: 1; transform: translateY(0); }
   }
   .wall-card { animation: cardIn 0.3s ease-out; }
+  /* 系统开启"减少动态效果"时关闭动画（省电/可访问性） */
+  @media (prefers-reduced-motion: reduce) {
+    .wall-card, .viewer, .viewer img { animation: none !important; transition: none !important; }
+  }
   .wall-card .cat-label {
     position: absolute; bottom: 0; left: 0; right: 0;
     background: linear-gradient(transparent, rgba(0,0,0,0.8));
     padding: 20px 10px 8px; font-size: 12px; color: #fff;
   }
-  .del-btn {
-    position: absolute; top: 8px; right: 8px;
-    background: rgba(255,68,68,0.9); color: #fff; border: none;
-    width: 28px; height: 28px; border-radius: 50%; cursor: pointer;
-    font-size: 14px; display: none; z-index: 5;
-    align-items: center; justify-content: center;
-  }
-  .del-btn:hover { background: #ff2222; }
-  .admin-mode .del-btn { display: flex; }
-
   /* 空状态 */
   .empty {
     text-align: center; padding: 80px 20px; color: var(--eva-text-dim);
@@ -347,7 +344,7 @@
 <!-- 顶部导航 -->
 <div class="header">
   <div class="logo">
-    <img class="nerv-icon" src="assets/nerv.png" alt="NERV">
+    <img class="nerv-icon" src="assets/nerv.png?v=2" alt="NERV">
     EVA<span>WALLPAPER LIBRARY</span>
   </div>
   <div class="header-right">
@@ -377,7 +374,7 @@
 <div class="viewer" id="viewer">
   <button class="viewer-close" onclick="closeViewer()">×</button>
   <button class="viewer-nav viewer-prev" onclick="navViewer(-1)">‹</button>
-  <img id="viewerImg" src="" alt="">
+  <img id="viewerImg" src="" alt="" decoding="async" onerror="showToast('图片加载失败，可能已被删除','error')">
   <button class="viewer-nav viewer-next" onclick="navViewer(1)">›</button>
   <div class="viewer-info">
     <a class="viewer-download" id="viewerDownload" href="" download>下载壁纸</a>
@@ -442,18 +439,6 @@
     <div class="modal-actions">
       <button class="btn btn-cancel" onclick="closeUploadModal()">取消</button>
       <button class="btn btn-primary" id="uploadConfirmBtn" onclick="doUpload()">确认上传</button>
-    </div>
-  </div>
-</div>
-
-<!-- 删除确认弹窗 -->
-<div class="modal-mask" id="deleteModal">
-  <div class="modal">
-    <h3>确认删除</h3>
-    <p style="color:var(--eva-text-dim);font-size:14px;margin-bottom:8px;">确定要删除这张壁纸吗？删除后无法恢复。</p>
-    <div class="modal-actions">
-      <button class="btn btn-cancel" onclick="closeDeleteModal()">取消</button>
-      <button class="btn btn-danger" onclick="confirmDelete()">确认删除</button>
     </div>
   </div>
 </div>
@@ -600,7 +585,7 @@ function renderGallery() {
     return `
       <div class="wall-card" style="animation-delay:${Math.min(idx * 25, 250)}ms" ${clickAct} data-id="${safeId}">
         ${checkHtml}
-        <img src="${getImageUrl(img)}" alt="${escapeHtml(CAT_MAP[img.category] || img.category)}" loading="lazy">
+        <img src="${getImageUrl(img)}" alt="${escapeHtml(CAT_MAP[img.category] || img.category)}" loading="lazy" decoding="async">
         <div class="cat-label">${escapeHtml(CAT_MAP[img.category] || img.category)}</div>
       </div>`;
   }).join('');
@@ -659,6 +644,13 @@ function updateViewer() {
   const dl = document.getElementById('viewerDownload');
   dl.href = url;
   dl.download = img.filename || 'wallpaper.jpg';
+  // 预加载相邻两张，左右切换秒开
+  const list = state.viewerList, n = list.length;
+  const nxt = list[(state.viewerIndex + 1) % n];
+  const prv = list[(state.viewerIndex - 1 + n) % n];
+  [nxt, prv].forEach(im => {
+    if (im) { const p = new Image(); p.src = getImageUrl(im); }
+  });
 }
 
 function closeViewer() {
@@ -672,8 +664,11 @@ function closeViewer() {
     img.style.transform = 'translate(' + f.dx + 'px, ' + f.dy + 'px) scale(' + f.s + ')';
     img.style.opacity = '0';
     setTimeout(() => {
-      viewer.classList.remove('active');
-      state.viewerFrom = null;
+      // 若期间重新打开了查看器（viewerFrom 已被替换），不要误关新窗口
+      if (state.viewerFrom === f) {
+        viewer.classList.remove('active');
+        state.viewerFrom = null;
+      }
     }, 210);
   } else {
     viewer.classList.remove('active');
@@ -1190,65 +1185,6 @@ async function selfHealManifest() {
   } catch(e) { /* 自愈失败不影响正常浏览 */ }
 }
 
-// ========== 删除 ==========
-function openDeleteModal(index) {
-  state.deleteTarget = index;
-  document.getElementById('deleteModal').classList.add('active');
-}
-
-function closeDeleteModal() {
-  state.deleteTarget = null;
-  document.getElementById('deleteModal').classList.remove('active');
-}
-
-async function confirmDelete() {
-  if (state.deleteTarget === null) return;
-  const img = state.images[state.deleteTarget];
-  if (!img) { closeDeleteModal(); return; }
-
-  try {
-    const { owner, repo, branch, token } = state.config;
-
-    // 获取文件sha
-    const fileRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}?ref=${branch}&t=${Date.now()}`, {
-      headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
-    });
-    if (!fileRes.ok) throw new Error('文件不存在或获取失败');
-    const fileData = await fileRes.json();
-
-    // 删除文件
-    const delRes = await fetchWithTimeout(`https://api.github.com/repos/${owner}/${repo}/contents/${img.path}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `token ${token}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/vnd.github.v3+json'
-      },
-      body: JSON.stringify({
-        message: `删除壁纸: ${img.filename}`,
-        sha: fileData.sha,
-        branch: branch
-      })
-    });
-    if (!delRes.ok) {
-      const err = await delRes.json();
-      throw new Error(err.message || '删除失败');
-    }
-
-    // 更新manifest
-    await updateManifest('remove', img);
-
-    showToast('删除成功', 'success');
-    closeDeleteModal();
-    // 本地立即移除，不等 GitHub 缓存
-    state.images = state.images.filter(i => i.id !== img.id);
-    renderGallery();
-  } catch(e) {
-    showToast('删除失败: ' + e.message, 'error');
-    closeDeleteModal();
-  }
-}
-
 // ========== 更新manifest ==========
 async function updateManifest(action, item) {
   const { owner, repo, branch, token } = state.config;
@@ -1311,11 +1247,13 @@ async function updateManifest(action, item) {
 }
 
 // ========== Toast ==========
+let toastTimer = null;
 function showToast(msg, type = 'success') {
   const t = document.getElementById('toast');
+  if (toastTimer) clearTimeout(toastTimer);
   t.textContent = msg;
   t.className = 'toast active ' + type;
-  setTimeout(() => t.classList.remove('active'), 3000);
+  toastTimer = setTimeout(() => t.classList.remove('active'), 3000);
 }
 
 // 点击遮罩关闭弹窗
